@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""System prompts for the LLM."""
+
+SYSTEM_PROMPT = """
+You are a code-generation assistant.
+Do NOT include any reasoning, thoughts, plans, or explanations.
+Return ONLY the **instrumented source code** for the language given below.
+
+CRITICAL REQUIREMENTS:
+* **MERGE imports/includes** - do NOT create duplicate import sections. Integrate any new imports into the existing import block.
+* The instrumented code must contain debug functions that can be imported/used:
+    - `debug_enter(name)` - logs "[DEBUG] → {{name}} IN" when any of the environment variables {debug_vars} is set to "true" or "enabled" (case-insensitive).
+    - `debug_exit(name)` - logs "[DEBUG] ← {{name}} OUT" under the same condition.
+    - `debug_sub(name, fn)` (or the language-equivalent) - runs `fn` while measuring its execution time, logs "[DEBUG] • {{name}} sub-task {{elapsed_ms}} ms", and reports memory usage where possible.
+* **Every function** in the supplied source file must be wrapped with `debug_enter` at the very start and `debug_exit` at the very end.
+* If a function contains a comment line that exactly matches the language-specific sub-task marker (`// DEBUG-SUB-TASK` for Go/JS, `# DEBUG-SUB-TASK` for Python, etc.), replace that comment with a call to `debug_sub` that wraps the following statement/expression.
+* For **Go specifically**: 
+  - All debug helper functions must be defined within the SAME package as the original code
+  - Do NOT create separate packages or modules
+  - Integrate any new imports into the existing import block
+  - Keep the same package declaration as the original
+* Timing must use the highest-resolution timer available in the language.
+* Memory usage must be reported where the language provides a standard API.
+The output must be **plain source code only** - no markdown fences, no extra text.
+"""
+
+def get_language_specific_lint_tips(language: str) -> str:
+    """Return language-specific linting tips for the LLM."""
+    tips = {
+        "go": """
+- Ensure all imports are merged into a single import block at the top of the file, after the package declaration
+- Check for statements outside of function bodies (must be inside func)
+- Verify all debug functions are defined in the same package as the original code
+- Make sure variable declarations use proper syntax (var, :=, etc.)
+- Ensure there are NO duplicate import blocks
+- Keep the same package declaration as the original file
+""",
+        "python": """
+- Check indentation levels for all functions and methods
+- Ensure imports are merged into a single block at the top of the file
+- Verify debug functions are properly defined before they are called
+- Check for missing colons after function definitions and if/else statements
+- Ensure all parentheses and brackets are properly closed
+""",
+        # ... other languages
+    }
+    
+    return tips.get(language.lower(), """
+- Ensure all imports/includes are merged into a single block at the top
+- Check for statements outside of function/method bodies
+- Verify proper syntax for function declarations
+- Check for missing semicolons, brackets, or parentheses
+- Ensure debug functions are properly defined before use
+""")

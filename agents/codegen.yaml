@@ -1,0 +1,22 @@
+type: codegen
+name: CodeGenAgent
+description: >
+  Generates source code for a given specification using an LLM.
+  The output is stored in the shared `output/repo` directory.
+class: agents.codegen.CodeGenAgent
+
+model:
+  provider: anthropic
+  name: claude-3-5-sonnet-20241022
+  temperature: 0.0
+  max_tokens: 4000
+
+# Where generated artefacts go (relative to repo root)
+output_dir: "./output/repo"
+
+# Optional post‑processing
+formatters:
+  - name: black
+    command: "black {file}"
+  - name: isort
+    command: "isort {file}"

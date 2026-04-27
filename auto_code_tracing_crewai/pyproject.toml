@@ -1,0 +1,23 @@
+[project]
+name = "auto_code_tracing_crewai"
+version = "0.1.0"
+description = "auto-code-tracing-crewai using crewAI"
+authors = [{ name = "Your Name", email = "you@example.com" }]
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "crewai[tools]>=0.203.0,<1.0.0"
+]
+
+[project.scripts]
+auto_code_tracing_crewai = "auto_code_tracing_crewai.main:run"
+run_crew = "auto_code_tracing_crewai.main:run"
+train = "auto_code_tracing_crewai.main:train"
+replay = "auto_code_tracing_crewai.main:replay"
+test = "auto_code_tracing_crewai.main:test"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.crewai]
+type = "crew"

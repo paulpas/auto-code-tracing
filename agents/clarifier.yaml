@@ -1,0 +1,17 @@
+type: clarifier
+name: ClarifierAgent
+description: >
+  Takes an ambiguous user request and asks follow‑up questions to
+  obtain a concrete, executable goal.
+class: agents.clarifier.ClarifierAgent
+
+model:
+  provider: openai
+  name: gpt-4o-mini
+  temperature: 0.2
+  max_tokens: 800
+
+max_iterations: 3          # how many clarification rounds before giving up
+stop_phrases:
+  - "thanks"
+  - "that's all"

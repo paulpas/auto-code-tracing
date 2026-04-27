@@ -1,0 +1,26 @@
+type: planner
+name: PlannerAgent
+description: >
+  Generates a structured plan (list of sub-tasks, dependencies, and
+  confidence scores) from a high-level user request.
+class: agents.planner.PlannerAgent
+
+model:
+  provider: anthropic
+  name: claude-3-5-sonnet-20241022
+  temperature: 0.0
+  max_tokens: 1500
+
+output_schema:
+  type: json
+  example: |
+    {
+      "plan": [
+        {"step": 1, "task": "Gather user requirements", "tool": null},
+        {"step": 2, "task": "Search relevant docs", "tool": "web_search"},
+        {"step": 3, "task": "Draft answer", "tool": "llm"}
+      ],
+      "confidence": 0.93
+    }
+
+log_thoughts: true

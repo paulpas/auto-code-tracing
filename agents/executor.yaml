@@ -1,0 +1,25 @@
+type: executor
+name: ExecutorAgent
+description: >
+  Takes a plan from the PlannerAgent and runs each step, calling the
+  appropriate tool (retriever, LLM, API, etc.). Handles retries and
+  aggregates partial results.
+class: agents.executor.ExecutorAgent
+
+retry:
+  max_attempts: 3
+  backoff_seconds: 2
+
+tool_map:
+  llm:          "software_builder.tools.llm_tool.LLMTool"
+  web_search:  "software_builder.tools.search_tool.WebSearchTool"
+  database:    "software_builder.tools.db_tool.DatabaseTool"
+  docker:      "software_builder.tools.docker_tool.DockerTool"
+
+aggregation:
+  method: "concatenate"
+  summarise_model:
+    provider: openai
+    name: gpt-4o-mini
+    temperature: 0.1
+    max_tokens: 500

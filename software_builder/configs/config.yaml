@@ -1,0 +1,29 @@
+# Top-level configuration file for the CrewAI system.
+# It tells the bootstrap code where to look for agents and for global
+# runtime options (logging, token budgets, etc.).
+
+agents_path: "./agents"
+
+# Global logging config – can be overridden by individual agents
+logging:
+  level: INFO
+  format: "[%(asctime)s] %(levelname)s %(name)s: %(message)s"
+  file: "./logs/crewai.log"
+
+# Token / cost budget (optional, enforced by PMAgent)
+budget:
+  max_total_tokens: 250000
+  max_cost_usd: 5.0
+
+# Optional external services
+vector_store:
+  default:
+    provider: chroma
+    persist_directory: "./data/chroma"
+
+# If you ever use docker-compose to stand up a separate vector-store,
+# set the URL here so that agents can read it from the same place.
+services:
+  pinecone:
+    url: "https://example-pinecone.io"
+    api_key: "<PINECONE_API_KEY>"

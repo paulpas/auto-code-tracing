@@ -1,0 +1,166 @@
+# debug_config.yaml
+# -------------------------------------------------
+# Choose the LLM provider you want to use.
+#   - openai:   calls the public OpenAI API
+#   - ollama:   talks to a local Ollama server
+# -------------------------------------------------
+
+# Main LLM configuration (restructured for new config manager)
+llm:
+  provider: openai          # "ollama" or "openai"
+  
+  # Provider-specific settings
+  host: "http://10.255.255.9:11434"  # ollama host
+  model: "gpt-oss:120b"               # ollama model
+  temperature: 0.0
+  max_tokens: 8192
+  
+  # OpenAI settings (used when provider=openai)
+  api_key: "${OPENAI_API_KEY}"
+  base_url: "https://api.openai.com/v1"
+  openai_model: "gpt-4.1"  # separate from ollama model
+
+# -------------------------------------------------
+# Legacy provider sections (maintained for backward compatibility)
+# -------------------------------------------------
+provider: openai
+
+openai:
+  api_key: "${OPENAI_API_KEY}"
+  model: "gpt-4.1" 
+  base_url: "https://api.openai.com/v1"
+
+ollama:
+  host: "http://10.255.255.9:11434"
+  model: "gpt-oss:120b"
+  temperature: 0.0
+  max_tokens: 8192
+
+# -------------------------------------------------
+# Debug and telemetry configuration
+# -------------------------------------------------
+
+# Environment variables that activate debug tracing
+debug_vars: ["DEBUG", "DEBUG_MODE", "TRACE", "VERBOSE"]
+debug_env_vars: ["DEBUG", "DEBUG_MODE"]  # legacy compatibility
+
+# File processing settings
+file_extensions:
+  - ".go"
+  - ".py" 
+  - ".js"
+  - ".java"
+  - ".cpp"
+  - ".c"
+
+# Cache configuration
+cache:
+  enabled: true
+  directory: ".debug_helpers"  # your preferred cache directory
+
+cache_dir: ".debug_helpers"   # legacy compatibility
+
+# -------------------------------------------------
+# Enhanced telemetry configuration
+# -------------------------------------------------
+telemetry:
+  enabled: true
+  precision: "nanosecond"        # timestamp precision
+  include_memory: true           # track memory usage
+  include_network: true          # track network calls
+  include_data_flow: true        # track data input/output sizes
+  include_errors: true           # track error conditions
+  
+  # Log formatting
+  log_format: "[TELEMETRY|{service}|{timestamp}] {level}: {details}"
+  unified_logging: true          # aggregate all service logs
+  
+  # Performance tracking
+  track_function_duration: true
+  track_sub_tasks: true
+  track_goroutines: true         # Go-specific
+  track_memory_allocation: true
+  
+  # Network call tracking
+  network_tracking:
+    enabled: true
+    track_request_size: true
+    track_response_size: true
+    track_status_codes: true
+    track_headers: false         # set to true for detailed header logging
+  
+  # Data flow tracking
+  data_flow_tracking:
+    enabled: true
+    track_input_sizes: true
+    track_output_sizes: true
+    track_data_types: true
+    max_data_preview: 100        # max chars to log for data preview
+
+# -------------------------------------------------
+# Service-specific settings
+# -------------------------------------------------
+services:
+  serviceA:
+    log_level: "DEBUG"
+    custom_telemetry:
+      - "crypto_operations"
+      - "key_generation" 
+      - "encryption_timing"
+  
+  serviceB:
+    log_level: "DEBUG"
+    custom_telemetry:
+      - "crypto_operations"
+      - "decryption_timing"
+      - "validation_checks"
+
+# -------------------------------------------------
+# Code generation settings
+# -------------------------------------------------
+code_generation:
+  language_specific:
+    go:
+      required_imports:
+        - "fmt"
+        - "os" 
+        - "runtime"
+        - "strings"
+        - "time"
+        - "net/http"
+      debug_function_prefix: "debug_"
+      memory_tracking: "runtime.ReadMemStats"
+      time_precision: "time.Now().UnixNano()"
+    
+    python:
+      required_imports:
+        - "time"
+        - "os"
+        - "sys"
+        - "psutil"
+        - "json"
+        - "logging"
+      debug_function_prefix: "debug_"
+      memory_tracking: "psutil.Process().memory_info()" 
+      time_precision: "time.time_ns()"
+
+# -------------------------------------------------
+# Advanced features
+# -------------------------------------------------
+advanced:
+  # Retry settings for LLM calls
+  llm_retry:
+    max_attempts: 3
+    backoff_seconds: 1
+  
+  # Validation settings
+  validation:
+    strict_mode: false           # strict syntax validation
+    lint_after_generation: true  # run linting pass
+    validate_telemetry: true     # ensure telemetry functions are present
+  
+  # Performance optimizations
+  performance:
+    parallel_processing: false   # process files in parallel
+    cache_validation: true       # validate cache integrity
+    incremental_updates: true    # only update changed files

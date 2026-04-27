@@ -1,0 +1,31 @@
+# debug_config.yaml
+# -------------------------------------------------
+# Choose the LLM provider you want to use.
+#   - openai:   calls the public OpenAI API
+#   - ollama:   talks to a local Ollama server
+# -------------------------------------------------
+provider: ollama          # or "opanai"
+
+# -------------------------------------------------
+# OpenAI specific settings (ignored when provider=ollama)
+# -------------------------------------------------
+openai:
+  api_key: "${OPENAI_API_KEY}"   # can be an env-var reference
+  model: "gpt-4o-mini"
+  base_url: "https://api.openai.com/v1"
+
+# -------------------------------------------------
+# Ollama specific settings (ignored when provider=openai)
+# -------------------------------------------------
+ollama:
+  host: "http://10.255.255.9:11434"
+  model: "gpt-oss:120b"
+  # optional: temperature, max_tokens, etc.
+  temperature: 0.0
+  max_tokens: 8192
+
+# -------------------------------------------------
+# Global behaviour
+# -------------------------------------------------
+debug_env_vars: ["DEBUG", "DEBUG_MODE"]   # any of these set to "true"/"enabled" activates tracing
+cache_dir: ".debug_helpers"               # where per-language helpers are stored

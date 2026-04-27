@@ -1,0 +1,15 @@
+type: scheduler
+name: SchedulerAgent
+description: >
+  Orchestrates when and how often the Planner/Executor loop runs.
+  Useful for background jobs, periodic updates, or rate-limited APIs.
+class: agents.scheduler.SchedulerAgent
+
+schedule:
+  cron: "*/5 * * * *"
+
+run_once: false
+
+rate_limit:
+  calls_per_minute: 60
+  burst_capacity: 10

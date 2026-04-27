@@ -1,0 +1,16 @@
+type: runner
+name: RunnerAgent
+description: >
+  Executes the final generated application (e.g., `python -m myapp`,
+  `docker run …`).  Captures stdout/stderr and returns a health‑check
+  status to the PM.
+class: agents.runner.RunnerAgent
+
+run_command: "python -m myapp"
+timeout_seconds: 120
+
+# If the repo contains a Dockerfile, the runner can fall back to container mode
+docker:
+  enabled: true
+  image_tag: "generated-app:latest"
+  build_context: "./output/repo"

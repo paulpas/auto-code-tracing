@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""
+Zero-touch instrumentation helper.
+
+It works for any language that Tree-sitter can parse.
+The LLM receives the *full source of a function* and returns the *same function
+already wrapped* with:
+  • a short description comment,
+  • a deterministic tag,
+  • entry/exit timing,
+  • a parent-tag link (if a header is present),
+  • automatic propagation of the tag on outbound HTTP calls.
+"""
+
+import argparse, pathlib, sys, json, textwrap, httpx
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+from generic_parser import language_for_extension, parse_functions
+
+# -------------------------------------------------
+# 1️⃣  LLM configuration (Ollama by default)
+# -------------------------------------------------
+OLLAMA_URL = "http://10.255.255.9:11434/api/generate"
+OLLAMA_MODEL = "gpt-oss:120b"          # any model that respects the prompt
+
+# -------------------------------------------------
+# 2️⃣  Prompt – the LLM receives the raw function source and must
+#    return ONLY the instrumented function source (no markdown fences).
+# -------------------------------------------------
+LLM_PROMPT = """
+You are an automatic instrumentation assistant.
+
+Task: Take the following source code of a single function and return a new version that:
+
+1️⃣ Adds a short comment describing the function (≤30 words).
+2️⃣ Generates a deterministic tag in the form "<service>.<function>" (the service name will be supplied later).
+3️⃣ At the very start of the function:
+   • Reads the HTTP header "X-Debug-Parent" from the incoming request (if the function is an HTTP handler) and,
+   • If a parent tag is present, prints:
+        [DEBUG] ↔ <parent-tag> → <my-tag>
+   • Starts a timer and prints the normal entry line:
+        [DEBUG] → <my-tag> IN args=…
+4️⃣ Wraps the body in a defer/finally that prints the normal exit line:
+        [DEBUG] ← <my-tag> OUT elapsed=…
+5️⃣ For **any outbound HTTP call** it sees (http.Get, http.Post, http.NewRequest,
+   client.Do, requests.get, fetch, etc.):
+   • Adds the header "X-Debug-Parent: <my-tag>" to the request before it is sent.
+   • (If the call already builds a request object, inject the appropriate header-setting line.)
+6️⃣ Keeps the original business logic unchanged.
+7️⃣ Uses only the language’s standard library (no extra imports).
+
+Return ONLY the complete instrumented function source – no markdown fences, no extra text.
+---  
+{code}
+"""
+
+def ask_llm(func_src: str, service_name: str) -> str:
+    """Send a function source to the LLM and get back the instrumented version."""
+    # Insert the service name into the prompt – the LLM will embed it in the tag.
+    prompt = LLM_PROMPT.format(code=func_src).replace("<service>", service_name)
+    payload = {
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "temperature": 0.0,
+        "max_tokens": 800,
+    }
+    r = httpx.post(OLLAMA_URL, json=payload, timeout=300.0)
+    r.raise_for_status()
+    raw = r.json()["response"]
+    # The model is instructed to output pure source code, but we strip any stray fences.
+    return raw.strip().strip("```")
+
+def instrument_file(src_path: pathlib.Path, service_name: str) -> pathlib.Path:
+    """Read a source file, ask the LLM to instrument each function, write plain/debug copies."""
+    ext = src_path.suffix
+    language = language_for_extension(ext)
+
+    source = src_path.read_text(encoding="utf8")
+    functions = parse_functions(source, language)
+
+    # Replace functions from the end of the file backwards so offsets stay valid.
+    instrumented = source
+    for fn in reversed(functions):
+        new_func = ask_llm(fn["source"], service_name)
+        instrumented = (
+            instrumented[:fn["start"]] + new_func + instrumented[fn["end"]:]
+        )
+
+    # Write the two output files
+    plain_path = src_path.with_name(src_path.stem + "_plain" + ext)
+    debug_path = src_path.with_name(src_path.stem + "_debug" + ext)
+
+    plain_path.write_text(source, encoding="utf8")
+    debug_path.write_text(instrumented, encoding="utf8")
+    return debug_path
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Language-agnostic source instrumentation using an LLM."
+    )
+    parser.add_argument("src_dir", type=pathlib.Path,
+                        help="Directory containing source files")
+    parser.add_argument("service_name", help="Logical service name (used in tags)")
+    args = parser.parse_args()
+
+    if not args.src_dir.is_dir():
+        sys.exit(f"❌ {args.src_dir} is not a directory")
+
+    for src_file in args.src_dir.glob("*.*"):
+        # Only instrument files we know how to parse
+        if src_file.suffix not in {".go", ".py", ".js"}:
+            continue
+        debug_path = instrument_file(src_file, args.service_name)
+        print(f"✅ {src_file.name} → {debug_path.name}")
+
+if __name__ == "__main__":
+    main()

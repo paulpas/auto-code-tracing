@@ -1,0 +1,14 @@
+type: project_manager
+name: PMAgent
+description: >
+  Oversees the whole crew, decides when to invoke other agents,
+  tracks budget (token usage) and overall progress.
+class: agents.pm.PMAgent
+
+budget:
+  max_tokens_per_run: 20000
+  max_time_seconds: 1800
+
+progress_reporting:
+  interval_seconds: 30
+  log_file: "./logs/pm_progress.log"

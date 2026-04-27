@@ -1,0 +1,12 @@
+type: debugger
+name: DebuggerAgent
+description: >
+  Runs unit-tests / lint on the generated code, captures failures,
+  and suggests fixes to the CodeGenAgent.
+class: agents.debugger.DebuggerAgent
+
+test_command: "pytest -q"
+lint_command: "flake8 ."
+
+# If a test fails, the agent will be invoked with the traceback.
+max_fix_attempts: 2

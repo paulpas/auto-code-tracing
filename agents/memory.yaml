@@ -1,0 +1,26 @@
+type: memory
+name: MemoryAgent
+description: >
+  Persists and retrieves conversational context. Uses a vector store
+  (FAISS, Chroma, Pinecone, …) and optional summarisation for long histories.
+class: agents.memory.MemoryAgent
+
+model:
+  provider: openai
+  name: gpt-4o-mini
+  temperature: 0.2
+  max_tokens: 1024
+
+vector_store:
+  provider: chroma
+  collection_name: conversation_memory
+  persist_directory: ./data/chroma
+
+summarise_long_history: true
+summary_length: 300
+max_history_turns: 50
+
+metadata:
+  version: "1.0"
+  author: "<YOUR_NAME>"
+  created_at: "<YYYY-MM-DD>"

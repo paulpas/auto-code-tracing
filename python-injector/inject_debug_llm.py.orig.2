@@ -1,0 +1,376 @@
+#!/usr/bin/env python3
+"""
+inject_debug_llm.py
+------------------
+
+A **pure-LLM-driven** source-code instrumenter that:
+* Detects the language of a file (generic_parser).
+* Sends the *whole* source to the LLM together with a deterministic prompt.
+* The LLM returns **only** the instrumented source code (helper + wrapped functions).
+* The injector writes **only** `<basename>_debug.<ext>` - the original file is never touched.
+* If a debug file already exists **and is up-to-date**, the injector skips the LLM call
+  (prevents creation of `*_debug_debug.*` files).
+
+The script works with OpenAI **or** a local Ollama server - the provider is chosen in
+`debug_config.yaml`.
+"""
+
+# ----------------------------------------------------------------------
+# 0️⃣  Imports, logging, warnings
+# ----------------------------------------------------------------------
+import os
+import sys
+import json
+import pathlib
+import hashlib
+import logging
+import warnings
+import re
+from typing import Any, Dict, Optional
+import httpx
+import yaml
+import jinja2
+from generic_parser import language_for_extension
+
+logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
+log = logging.getLogger(__name__)
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="re")
+
+# ----------------------------------------------------------------------
+# 1️⃣  Load configuration (debug_config.yaml)
+# ----------------------------------------------------------------------
+CONFIG_PATH = pathlib.Path("debug_config.yaml")
+if not CONFIG_PATH.is_file():
+    sys.exit("❌  debug_config.yaml not found - create it first.")
+CONFIG = yaml.safe_load(CONFIG_PATH.read_text())
+
+PROVIDER = CONFIG["provider"]
+OPENAI_CFG = CONFIG.get("openai", {})
+OLLAMA_CFG = CONFIG.get("ollama", {})
+DEBUG_VARS = {v.upper() for v in CONFIG.get("debug_env_vars", ["DEBUG"])}
+CACHE_DIR = pathlib.Path(CONFIG.get("cache_dir", ".debug_cache"))
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ----------------------------------------------------------------------
+# 3️⃣  Build the request payload (system prompt + user prompt)
+# ----------------------------------------------------------------------
+def build_payload(user_prompt: str) -> Dict[str, Any]:
+    payload = {
+        "model": OPENAI_CFG["model"] if PROVIDER == "openai" else OLLAMA_CFG["model"],
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT.format(debug_vars=", ".join(DEBUG_VARS))},
+            {"role": "user", "content": user_prompt},
+        ],
+        "stream": False,
+        "temperature": (
+            OPENAI_CFG.get("temperature", 0.0)
+            if PROVIDER == "openai"
+            else OLLAMA_CFG.get("temperature", 0.0)
+        ),
+    }
+    return payload
+
+# ----------------------------------------------------------------------
+# 4️⃣ & 5️⃣  Call the LLM and extract content
+# ----------------------------------------------------------------------
+def filter_thinking(text: str) -> str:
+    """
+    Filter out thinking sections from the response.
+
+    Args:
+        text: The full LLM response text
+
+    Returns:
+        The filtered response with thinking sections removed
+    """
+    # Remove <thinking>...</thinking> tags
+    text = re.sub(r'<thinking>.*?</thinking>', '', text, flags=re.DOTALL)
+
+    # Remove ```thinking ... ``` blocks
+    text = re.sub(r'```thinking.*?```', '', text, flags=re.DOTALL)
+
+    # Clean up extra whitespace that might result from removals
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = text.strip()
+
+    return text
+
+def call_ollama(payload: Dict[str, Any]) -> Optional[str]:
+    """
+    Send a request to the Ollama API and return the filtered response.
+    
+    Args:
+        payload: The request payload
+        
+    Returns:
+        The filtered response text, or None if the request failed
+    """
+    url = f"{OLLAMA_CFG['host']}/api/chat"
+    
+    try:
+        with httpx.Client(timeout=1200.0) as client:  # Longer timeout
+            response = client.post(url, json=payload)
+            response.raise_for_status()  # Raise an exception for HTTP errors
+            
+            # Store the raw response for debugging
+            raw_response = response.text
+            log.debug(f"Raw Ollama response: {raw_response[:200]}...")  # Log first 200 chars
+            
+            try:
+                result = response.json()
+                
+                # Debug what fields are available in the response
+                log.debug(f"Available fields in Ollama response: {list(result.keys())}")
+                
+                # Check if we received an empty content field
+                if "message" in result and "content" in result["message"]:
+                    content = result["message"]["content"]
+                    if not content or content.strip() == "":
+                        log.error("Received empty content field from Ollama")
+                        
+                        # Try to retry with format parameter explicitly set - this helps for some models
+                        log.info("Retrying with explicit format parameter...")
+                        retry_payload = payload.copy()
+                        retry_payload["format"] = "python"  # or another appropriate format
+                        
+                        # Make retry request
+                        retry_response = client.post(url, json=retry_payload)
+                        retry_response.raise_for_status()
+                        retry_result = retry_response.json()
+                        
+                        if "message" in retry_result and "content" in retry_result["message"]:
+                            content = retry_result["message"]["content"]
+                            if content and content.strip() != "":
+                                return filter_thinking(content)
+                        
+                        # If retry didn't work, try a different approach - remove JSON formatting completely
+                        log.info("Retrying with JSON format disabled...")
+                        basic_payload = {
+                            "model": OLLAMA_CFG["model"],
+                            "prompt": f"{SYSTEM_PROMPT.format(debug_vars=', '.join(DEBUG_VARS))}\n\n{payload['messages'][1]['content']}",
+                            "stream": False,
+                            "raw": True  # Use raw mode to avoid JSON formatting issues
+                        }
+                        basic_response = client.post(f"{OLLAMA_CFG['host']}/api/generate", json=basic_payload)
+                        basic_response.raise_for_status()
+                        basic_result = basic_response.json()
+                        
+                        if "response" in basic_result:
+                            return filter_thinking(basic_result["response"])
+                        
+                        # If we're still here, we have a problem
+                        log.error("All retry attempts failed to get content from Ollama")
+                        return None
+                    
+                    # We have content, filter and return it
+                    return filter_thinking(content)
+                elif "response" in result:
+                    return filter_thinking(result["response"])
+                else:
+                    # If expected fields are not found, log full response for debugging
+                    log.error(f"Could not find content in Ollama response. Full response: {raw_response[:500]}")
+                    
+                    # Try using the older /api/generate endpoint as a fallback
+                    log.info("Trying fallback to /api/generate endpoint...")
+                    fallback_payload = {
+                        "model": OLLAMA_CFG["model"],
+                        "prompt": f"{SYSTEM_PROMPT.format(debug_vars=', '.join(DEBUG_VARS))}\n\n{payload['messages'][1]['content']}",
+                        "stream": False
+                    }
+                    fallback_response = client.post(f"{OLLAMA_CFG['host']}/api/generate", json=fallback_payload)
+                    fallback_response.raise_for_status()
+                    fallback_result = fallback_response.json()
+                    
+                    if "response" in fallback_result:
+                        return filter_thinking(fallback_result["response"])
+                    
+                    return None
+            except json.JSONDecodeError as je:
+                log.error(f"Failed to parse JSON response: {je}")
+                log.debug(f"Invalid JSON response: {raw_response[:500]}")
+                return None
+    
+    except httpx.HTTPError as e:
+        log.error(f"Error calling Ollama API: {e}")
+        return None
+
+
+def call_openai(payload: Dict[str, Any]) -> Optional[str]:
+    """
+    Direct call to OpenAI API
+    
+    Args:
+        payload: The request payload
+        
+    Returns:
+        The response text, or None if the request failed
+    """
+    url = OPENAI_CFG["base_url"] + "/chat/completions"
+    headers = {"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}"}
+
+    try:
+        with httpx.Client(timeout=60.0) as client:
+            resp = client.post(url, headers=headers, json=payload)
+            resp.raise_for_status()
+            response_json = resp.json()
+            return response_json['choices'][0]['message']['content']
+    except Exception as e:
+        log.error(f"Error calling OpenAI: {str(e)}")
+        return None
+
+def call_llm(user_prompt: str) -> Optional[str]:
+    """
+    Call the appropriate LLM based on provider configuration
+    
+    Args:
+        user_prompt: The user's prompt
+        
+    Returns:
+        The response from the LLM, or None if there was an error
+    """
+    payload = build_payload(user_prompt)
+
+    if PROVIDER == "openai":
+        return call_openai(payload)
+    else:  # ollama
+        return call_ollama(payload)
+
+# ----------------------------------------------------------------------
+# 6️⃣  Cache handling - avoid re-instrumenting unchanged files
+# ----------------------------------------------------------------------
+def file_hash(path: pathlib.Path) -> str:
+    """SHA-256 hash of the file contents (binary-safe)."""
+    h = hashlib.sha256()
+    h.update(path.read_bytes())
+    return h.hexdigest()
+
+def cached_debug_path(src_path: pathlib.Path, src_hash: str) -> pathlib.Path:
+    """Path inside CACHE_DIR where the instrumented version is stored."""
+    return CACHE_DIR / f"{src_path.stem}_{src_hash}_debug{src_path.suffix}"
+
+# ----------------------------------------------------------------------
+# 2️⃣  System prompt - tells the model exactly what to do
+# ----------------------------------------------------------------------
+SYSTEM_PROMPT = """
+You are a code-generation assistant.
+Do NOT include any reasoning, thoughts, plans, or explanations.
+Return ONLY the **instrumented source code** for the language given below.
+The instrumented code must contain:
+* a helper (importable with a single statement, e.g. `import debug` or `import "debug"`) that defines:
+    - `debug_enter(name)` - logs "[DEBUG] → {{name}} IN" when any of the environment variables
+      {debug_vars} is set to "true" or "enabled" (case-insensitive).
+    - `debug_exit(name)` - logs "[DEBUG] ← {{name}} OUT" under the same condition.
+    - `debug_sub(name, fn)` (or the language-equivalent) - runs `fn` while measuring its execution time,
+      logs "[DEBUG] • {{name}} sub-task {{elapsed_ms}} ms", and, where possible, reports memory usage before/after the call.
+* **Every function** in the supplied source file must be wrapped with `debug_enter` at the very start and `debug_exit` at the very end.
+* If a function contains a comment line that exactly matches the language-specific
+  sub-task marker (`// DEBUG-SUB-TASK` for Go/JS, `# DEBUG-SUB-TASK` for Python, etc.),
+  replace that comment with a call to `debug_sub` that wraps the following statement/expression.
+* Timing must use the highest-resolution timer available in the language.
+* Memory usage must be reported where the language provides a standard API
+  (e.g. `runtime.ReadMemStats` in Go, `tracemalloc` in Python, `process.memoryUsage` in Node).
+The output must be **plain source code only** - no markdown fences, no extra text.
+"""
+
+# ----------------------------------------------------------------------
+# 7️⃣  Core injection - **LLM does everything**
+# ----------------------------------------------------------------------
+def inject_file(src_path: pathlib.Path):
+    # Skip files that already have the _debug suffix.
+    if src_path.stem.endswith("_debug"):
+        log.info("⏭️   %s already ends with _debug - skipping", src_path.name)
+        return
+
+    # Detect language (generic_parser knows the mapping)
+    lang_obj = language_for_extension(src_path.suffix)
+    lang_name = lang_obj if isinstance(lang_obj, str) else getattr(lang_obj, "name", "unknown")
+
+    # Compute hash and decide whether we need to run the LLM
+    src_hash = file_hash(src_path)
+    debug_path = src_path.with_name(src_path.stem + "_debug" + src_path.suffix)
+
+    # If a debug file already exists and is newer than the source, assume it is up-to-date
+    if debug_path.is_file() and debug_path.stat().st_mtime >= src_path.stat().st_mtime:
+        # Check if the file contains actual code and not JSON error response
+        debug_content = debug_path.read_text()
+        if debug_content.strip().startswith('{') and '"message":' in debug_content:
+            # Looks like an error response, not actual code - don't skip
+            log.warning("🔄  Previous debug file contains JSON response, not code. Regenerating...")
+        else:
+            log.info("✅  %s → %s (already up-to-date, skipped)", src_path.name, debug_path.name)
+            return  # Nothing else to do
+
+    # Look for a cached instrumented version (hash-based)
+    cache_path = cached_debug_path(src_path, src_hash)
+    if cache_path.is_file():
+        # Cached version is guaranteed to be fresh (hash matches source)
+        cache_content = cache_path.read_text()
+        # Validate it's not a JSON error response
+        if cache_content.strip().startswith('{') and '"message":' in cache_content:
+            log.warning("🔄  Cached file contains JSON response, not code. Regenerating...")
+        else:
+            debug_path.write_text(cache_content, encoding="utf-8")
+            log.info("✅  %s → %s (cached)", src_path.name, debug_path.name)
+            return
+
+    # Build the user prompt that contains the *entire* source file
+    source_code = src_path.read_text()
+    user_prompt = f"---BEGIN SOURCE---\n{source_code}\n---END SOURCE---\nLanguage: {lang_name}"
+
+    # Ask the LLM to instrument the code
+    instrumented = call_llm(user_prompt)
+
+    if not instrumented:
+        log.error("❌  Failed to instrument: %s", src_path.name)
+        return
+
+    # Safety check: Is the response JSON instead of code?
+    if instrumented.strip().startswith('{') and ('"message":' in instrumented or '"response":' in instrumented):
+        try:
+            json_obj = json.loads(instrumented)
+            # If we can extract content from the JSON, do that
+            if "message" in json_obj and "content" in json_obj["message"] and json_obj["message"]["content"]:
+                instrumented = json_obj["message"]["content"]
+                log.info("📝  Successfully extracted content from JSON response")
+            elif "response" in json_obj and json_obj["response"]:
+                instrumented = json_obj["response"]
+                log.info("📝  Successfully extracted response from JSON")
+            else:
+                log.error(f"❌  Got JSON response instead of code for {src_path.name}: {instrumented[:100]}...")
+                return
+        except json.JSONDecodeError:
+            # Not valid JSON, so probably code with braces
+            pass
+    
+    # Additional validation - if it's a Go file, it should contain "package" declaration
+    if src_path.suffix == ".go" and "package " not in instrumented:
+        log.error("❌  Generated Go code appears invalid - missing package declaration")
+        return
+    
+    # Additional validation for Python files
+    if src_path.suffix == ".py" and "def " not in instrumented:
+        log.error("❌  Generated Python code appears invalid - missing function definitions")
+        return
+
+    # Write the instrumented version to the cache *and* to the final file
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(instrumented, encoding="utf-8")
+    debug_path.write_text(instrumented, encoding="utf-8")
+    log.info("✅  %s → %s (fresh)", src_path.name, debug_path.name)
+
+# ----------------------------------------------------------------------
+# 8️⃣  CLI entry point - called from the Makefile
+# ----------------------------------------------------------------------
+def main():
+    if len(sys.argv) != 3:
+        sys.exit("Usage: inject_debug_llm.py <service_dir> <service_name>")
+    service_dir = pathlib.Path(sys.argv[1])
+
+    # Walk the directory and process every source file we recognise
+    for ext in (".go", ".py", ".js", ".ts"):
+        for src in service_dir.rglob(f"*{ext}"):
+            inject_file(src)
+
+if __name__ == "__main__":
+    main()

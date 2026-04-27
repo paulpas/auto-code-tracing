@@ -1,0 +1,14 @@
+type: documenter
+name: DocumenterAgent
+description: >
+  Takes the final repository and produces markdown documentation
+  (README, API docs) using an LLM.
+class: agents.documenter.DocumenterAgent
+
+model:
+  provider: openai
+  name: gpt-4o-mini
+  temperature: 0.3
+  max_tokens: 1500
+
+output_file: "README.md"

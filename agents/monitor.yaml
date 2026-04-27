@@ -1,0 +1,20 @@
+type: monitor
+name: MonitorAgent
+description: >
+  Observes the output of the ExecutorAgent, flags policy violations,
+  toxicity, or disallowed content, and can abort or rewrite the response.
+class: agents.monitor.MonitorAgent
+
+model:
+  provider: openai
+  name: gpt-4o-mini
+  temperature: 0.0
+  max_tokens: 256
+
+policies:
+  - name: "No personal data leakage"
+    rule: "if response contains regex '\\b\\d{3}-\\d{2}-\\d{4}\\b' then block"
+  - name: "No hate speech"
+    rule: "use OpenAI moderation endpoint"
+
+action_on_violation: "rewrite"

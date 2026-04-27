@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""Core injection logic."""
+
+import json
+import pathlib
+import logging
+from typing import Optional
+from generic_parser import language_for_extension
+from llm.prompts import SYSTEM_PROMPT
+
+log = logging.getLogger(__name__)
+
+class CodeInjector:
+    def __init__(self, llm_client, cache_manager, validator, filesystem_manager):
+        self.llm_client = llm_client
+        self.cache_manager = cache_manager
+        self.validator = validator
+        self.filesystem_manager = filesystem_manager
+    
+    def inject_file(self, src_path: pathlib.Path, service_dir: pathlib.Path):
+        """Inject debug instrumentation into a single file."""
+        # Skip files that should be ignored
+        if self.filesystem_manager.should_skip_file(src_path):
+            log.info("⏭️    %s - skipping", src_path.name)
+            return
+        
+        # Create debug directory structure
+        debug_dir = self.filesystem_manager.create_debug_directory_structure(service_dir)
+        debug_path = debug_dir / f"{src_path.stem}_debug{src_path.suffix}"
+        
+        # Check if debug file is up-to-date
+        if self.filesystem_manager.is_debug_file_up_to_date(src_path, debug_path):
+            log.info("✅  %s → %s (already up-to-date, skipped)", src_path.name, debug_path.name)
+            self.validator.lint_debug_file(src_path, debug_path)
+            return
+        
+        # Check cache
+        cached_content = self.cache_manager.get_cached_content(src_path)
+        if cached_content:
+            debug_path.write_text(cached_content, encoding="utf-8")
+            log.info("✅  %s → %s (cached)", src_path.name, debug_path.name)
+            self.validator.lint_debug_file(src_path, debug_path)
+            return
+        
+        # Generate instrumented code
+        instrumented = self._generate_instrumented_code(src_path)
+        
+        if not instrumented:
+            log.error("❌  Failed to instrument: %s", src_path.name)
+            return
+        
+        # Validate the generated code
+        if not self._validate_generated_code(src_path, instrumented):
+            log.error("❌  Generated code appears invalid for: %s", src_path.name)
+            return
+        
+        # Save to cache and debug file
+        self.cache_manager.save_to_cache(src_path, instrumented)
+        debug_path.write_text(instrumented, encoding="utf-8")
+        log.info("✅  %s → %s (fresh)", src_path.name, debug_path.name)
+        
+        # Lint the generated file
+        self.validator.lint_debug_file(src_path, debug_path)
+    
+    def _generate_instrumented_code(self, src_path: pathlib.Path) -> Optional[str]:
+        """Generate instrumented code using LLM."""
+        # Detect language
+        lang_obj = language_for_extension(src_path.suffix)
+        lang_name = lang_obj if isinstance(lang_obj, str) else getattr(lang_obj, "name", "unknown")
+        
+        # Build the user prompt
+        source_code = src_path.read_text()
+        user_prompt = f"""---BEGIN SOURCE---
+{source_code}
+---END SOURCE---
+Language: {lang_name}
+
+CRITICAL INSTRUCTIONS:
+- **Merge all imports** - do NOT create separate import blocks
+- For Go: keep the same package declaration and put debug functions in the same package
+- Integrate any new imports into the existing import statement
+- Do NOT duplicate any import sections"""
+        
+        # Ask the LLM to instrument the code
+        instrumented = self.llm_client.call(user_prompt, SYSTEM_PROMPT)
+        
+        if not instrumented:
+            return None
+        
+        # Handle JSON responses
+        instrumented = self._extract_from_json_if_needed(instrumented)
+        
+        return instrumented
+    
+    def _extract_from_json_if_needed(self, response: str) -> str:
+        """Extract code from JSON response if needed."""
+        if response.strip().startswith('{') and ('"message":' in response or '"response":' in response):
+            try:
+                json_obj = json.loads(response)
+                if "message" in json_obj and "content" in json_obj["message"] and json_obj["message"]["content"]:
+                    response = json_obj["message"]["content"]
+                    log.info("📝  Successfully extracted content from JSON response")
+                elif "response" in json_obj and json_obj["response"]:
+                    response = json_obj["response"]
+                    log.info("📝  Successfully extracted response from JSON")
+            except json.JSONDecodeError:
+                pass
+        
+        return response
+    
+    def _validate_generated_code(self, src_path: pathlib.Path, instrumented: str) -> bool:
+        """Basic validation of generated code."""
+        # Validation for Go files
+        if src_path.suffix == ".go" and "package " not in instrumented:
+            return False
+        
+        # Validation for Python files
+        if src_path.suffix == ".py" and "def " not in instrumented:
+            return False
+        
+        return True

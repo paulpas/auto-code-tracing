@@ -1,0 +1,31 @@
+type: integrator
+name: IntegratorAgent
+description: >
+  Takes artefacts from the CodeGen, Debugger and Documenter agents,
+  stitches them together into a cohesive repository (adds CI config,
+  Dockerfile, etc.).
+class: agents.integrator.IntegratorAgent
+
+ci_template: |
+  name: CI
+  on: [push, pull_request]
+  jobs:
+    build:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v3
+        - name: Set up Python
+          uses: actions/setup-python@v4
+          with:
+            python-version: "3.11"
+        - name: Install deps
+          run: pip install -r requirements.txt
+        - name: Run tests
+          run: pytest
+
+dockerfile_template: |
+  FROM python:3.11-slim
+  WORKDIR /app
+  COPY . /app
+  RUN pip install -r requirements.txt
+  CMD ["python", "-m", "myapp"]
